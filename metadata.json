@@ -1,0 +1,13 @@
+{
+  "name": "Nexus Social",
+  "description": "A modern, full-stack social media platform with real-time interactions, personalized feeds, and a sleek Instagram-inspired UI.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "Real-time Chat",
+    "Post Sharing",
+    "Feed Personalization"
+  ]
+}

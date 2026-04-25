@@ -1,0 +1,119 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Phase 3: Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Phase 4: Entity Validators
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'username', 'email', 'createdAt', 'updatedAt'])
+        && data.keys().size() >= 5
+        && data.uid == request.auth.uid
+        && data.username is string && data.username.size() >= 3 && data.username.size() <= 30
+        && data.email is string && data.email.size() <= 100
+        && (data.photoURL == null || (data.photoURL is string && data.photoURL.size() <= 500))
+        && (data.bio == null || (data.bio is string && data.bio.size() <= 500))
+        && (data.followersCount == null || data.followersCount is number)
+        && (data.followingCount == null || data.followingCount is number)
+        && data.createdAt == request.time
+        && data.updatedAt == request.time;
+    }
+
+    function isValidPost(data) {
+      return data.keys().hasAll(['id', 'authorId', 'imageUrl', 'likesCount', 'commentsCount', 'createdAt', 'updatedAt'])
+        && data.keys().size() >= 7
+        && data.authorId == request.auth.uid
+        && data.imageUrl is string && data.imageUrl.size() <= 1000
+        && (data.caption == null || (data.caption is string && data.caption.size() <= 2200))
+        && data.likesCount is number && data.likesCount >= 0
+        && data.commentsCount is number && data.commentsCount >= 0
+        && data.createdAt == request.time
+        && data.updatedAt == request.time;
+    }
+
+    function isValidComment(data) {
+      return data.keys().hasAll(['id', 'postId', 'authorId', 'text', 'createdAt'])
+        && data.authorId == request.auth.uid
+        && data.text is string && data.text.size() >= 1 && data.text.size() <= 1000
+        && data.createdAt == request.time;
+    }
+
+    function isValidNotification(data) {
+       return data.keys().hasAll(['id', 'recipientId', 'senderId', 'type', 'isRead', 'createdAt'])
+        && data.senderId == request.auth.uid
+        && data.isRead == false
+        && data.createdAt == request.time;
+    }
+
+    // Rules
+    match /users/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+      allow create: if isOwner(userId) && isValidUser(incoming());
+      allow update: if isOwner(userId) && isValidUser(incoming()) && 
+        incoming().diff(existing()).affectedKeys().hasOnly(['username', 'photoURL', 'bio', 'updatedAt']);
+    }
+
+    match /posts/{postId} {
+      allow read: if isSignedIn();
+      allow create: if isEmailVerified() && isValidPost(incoming());
+      allow update: if isEmailVerified() && (
+        (isOwner(existing().authorId) && incoming().diff(existing()).affectedKeys().hasOnly(['caption', 'hashtags', 'updatedAt'])) ||
+        (incoming().diff(existing()).affectedKeys().hasOnly(['likesCount', 'commentsCount'])) // Counter updates
+      );
+      allow delete: if isOwner(existing().authorId);
+
+      match /comments/{commentId} {
+        allow read: if isSignedIn();
+        allow create: if isEmailVerified() && isValidComment(incoming());
+        allow delete: if isOwner(existing().authorId) || isOwner(get(/databases/$(database)/documents/posts/$(postId)).data.authorId);
+      }
+
+      match /likes/{userId} {
+        allow read: if isSignedIn();
+        allow create: if isEmailVerified() && isOwner(userId);
+        allow delete: if isOwner(userId);
+      }
+    }
+
+    match /followers/{relationshipId} {
+      allow read: if isSignedIn();
+      allow create: if isEmailVerified() && isOwner(incoming().followerId);
+      allow delete: if isOwner(existing().followerId);
+    }
+
+    match /notifications/{notificationId} {
+      allow get, delete: if isOwner(existing().recipientId);
+      allow list: if isOwner(resource.data.recipientId);
+      allow create: if isEmailVerified() && isValidNotification(incoming());
+      allow update: if isOwner(existing().recipientId) && incoming().diff(existing()).affectedKeys().hasOnly(['isRead']);
+    }
+  }
+}
